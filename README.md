@@ -8,13 +8,6 @@
 3.  Lakukan **Setup Location** (contoh Jakarta: Latitude -6.2088, Longitude 106.8456) pada layar inisialisasi stasiun.
 4.  Masukkan parameter temperatur dan GHI secara manual atau unggah file CSV pada dashboard utama untuk pemrosesan data massal.
 
-## Project Affiliation
-
-*   **Lead Developer**: Jad Abyanza Fauzan
-*   **Institution**: Binus University - Computer Science (AI Specialization 2028)
-*   **Organization**: HIMTI (General Manager of Research and Development)
-*   **Research Focus**: Sustainable Development Goals (SDG) 7
-
 ## License
 
 This project is licensed under the MITBerikut adalah file `README.md` lengkap dengan format profesional menggunakan *badges* (lencana) teknis dan struktur organisasi yang formal tanpa menggunakan elemen dekoratif.
