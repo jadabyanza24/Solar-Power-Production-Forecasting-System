@@ -1,19 +1,3 @@
-## Usage
-
-1.  Tempatkan file model `xgboost_solar_edge_TUNED.json` di direktori akar proyek.
-2.  Jalankan aplikasi Streamlit:
-    ```bash
-    streamlit run app.py
-    ```
-3.  Lakukan **Setup Location** (contoh Jakarta: Latitude -6.2088, Longitude 106.8456) pada layar inisialisasi stasiun.
-4.  Masukkan parameter temperatur dan GHI secara manual atau unggah file CSV pada dashboard utama untuk pemrosesan data massal.
-
-## License
-
-This project is licensed under the MITBerikut adalah file `README.md` lengkap dengan format profesional menggunakan *badges* (lencana) teknis dan struktur organisasi yang formal tanpa menggunakan elemen dekoratif.
-
----
-```markdown
 # Solar Power Production Forecasting System
 
 [![Python Version](https://img.shields.io/badge/python-3.9%2B-blue)](https://www.python.org)
