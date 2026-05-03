@@ -41,3 +41,14 @@ git clone [https://github.com/username/solar-power-forecasting.git](https://gith
 
 # Install dependencies
 pip install streamlit pandas numpy xgboost scikit-learn
+
+Usage
+Tempatkan file model xgboost_solar_edge_TUNED.json di direktori akar proyek.
+
+Jalankan aplikasi Streamlit:
+
+Bash
+streamlit run app.py
+Lakukan Setup Location (misal Jakarta: Lat -6.2088, Long 106.8456) pada layar inisialisasi.
+
+Masukkan parameter temperatur dan GHI atau unggah file CSV pada dashboard utama.
