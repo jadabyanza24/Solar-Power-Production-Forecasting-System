@@ -5,6 +5,21 @@ import pickle
 import time
 import math
 
+import os
+import urllib.request
+
+MODEL_PATH = "model.pkl"
+
+MODEL_URL = (
+    "https://huggingface.co/jadabyanza/solar-model/resolve/main/model.pkl"
+)
+
+if not os.path.exists(MODEL_PATH):
+    with st.spinner("Downloading AI model from Hugging Face..."):
+        urllib.request.urlretrieve(
+            MODEL_URL,
+            MODEL_PATH
+        )
 # ─────────────────────────────────────────────────────────────
 # Page config
 # ─────────────────────────────────────────────────────────────
@@ -96,22 +111,26 @@ def build_feature_row(temp, irradiance_wm2, hour, region, lag_power_norm=0.0):
 # pkl = list of dicts: { 'Model': str, 'Object': trained_model, ... }
 # ─────────────────────────────────────────────────────────────
 @st.cache_resource
-def load_model_bundle(pkl_path="model.pkl"):
+def load_model_bundle():
     try:
-        with open(pkl_path, "rb") as f:
+        with open("model.pkl", "rb") as f:
             results = pickle.load(f)
-    except FileNotFoundError:
+    except Exception as e:
+        st.error(f"Failed to load model: {e}")
         return None, []
 
     xgb_model = None
+
     for r in results:
         name = r.get("Model", "")
-        obj  = r.get("Object")
+        obj = r.get("Object")
+
         if obj and ("XGBoost" in name or "xgb" in name.lower()):
             xgb_model = obj
             break
 
     feat_names = []
+
     if xgb_model is not None:
         try:
             feat_names = xgb_model.get_booster().feature_names or []
@@ -246,7 +265,7 @@ else:
             st.success("XGBoost model ready")
         else:
             st.error(
-                "Model tidak ditemukan. Pastikan `all_training_results_combined.pkl` "
+                "Model tidak ditemukan. Pastikan `model.pkl` "
                 "ada di direktori yang sama dengan `app.py`."
             )
 
@@ -269,7 +288,7 @@ else:
 
     if xgb_model is None:
         st.warning(
-            "Model belum termuat. Letakkan `all_training_results_combined.pkl` "
+            "Model belum termuat. Letakkan `model.pkl` "
             "di direktori yang sama dengan `app.py`, lalu refresh."
         )
         st.stop()
