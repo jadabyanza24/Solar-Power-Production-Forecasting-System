@@ -1,10 +1,16 @@
 import streamlit as st
+
+# HARUS PALING AWAL
+st.set_page_config(
+    page_title="Photovoltaic Management System",
+    layout="wide"
+)
+
 import pandas as pd
 import numpy as np
 import pickle
 import time
 import math
-
 import os
 import urllib.request
 
@@ -15,15 +21,10 @@ MODEL_URL = (
 )
 
 if not os.path.exists(MODEL_PATH):
-    with st.spinner("Downloading AI model from Hugging Face..."):
-        urllib.request.urlretrieve(
-            MODEL_URL,
-            MODEL_PATH
-        )
-# ─────────────────────────────────────────────────────────────
-# Page config
-# ─────────────────────────────────────────────────────────────
-st.set_page_config(page_title="Photovoltaic Management System", layout="wide")
+    urllib.request.urlretrieve(
+        MODEL_URL,
+        MODEL_PATH
+    )
 
 # ─────────────────────────────────────────────────────────────
 # Region assignment — tropical override + bbox-first + nearest edge
