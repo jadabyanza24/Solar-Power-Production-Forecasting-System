@@ -342,6 +342,109 @@ else:
                     f"Lag power diperbarui ke **{st.session_state.last_power_norm:.4f}** "
                     "untuk prediksi berikutnya."
                 )
+                st.divider()
+                st.subheader("Production Forecast by Hour")
+
+                hours = list(range(6, 19))
+                hour_preds = []
+
+                for h in hours:
+                    pred_h, _ = predict_power(
+                        xgb_model,
+                        temp,
+                        irradiance,
+                        h,
+                        cfg_region,
+                        lag_norm,
+                        cfg_maxpow
+                    )
+                    hour_preds.append(pred_h)
+
+                hour_df = pd.DataFrame({
+                    "Hour": hours,
+                    "Predicted Output (kWh)": hour_preds
+                })
+
+                st.line_chart(
+                    hour_df.set_index("Hour"),
+                    use_container_width=True
+                )
+                st.subheader("Temperature Sensitivity")
+
+                temp_range = np.arange(
+                    temp - 10,
+                    temp + 11,
+                    1
+                )
+
+                temp_preds = []
+
+                for t in temp_range:
+
+                    pred_t, _ = predict_power(
+                        xgb_model,
+                        t,
+                        irradiance,
+                        hour,
+                        cfg_region,
+                        lag_norm,
+                        cfg_maxpow
+                    )
+
+                    temp_preds.append(pred_t)
+
+                temp_df = pd.DataFrame({
+                    "Temperature": temp_range,
+                    "Output (kWh)": temp_preds
+                })
+
+                st.line_chart(
+                    temp_df.set_index("Temperature"),
+                    use_container_width=True
+                )
+                st.subheader("Irradiance Sensitivity")
+
+                irr_values = np.arange(
+                    0,
+                    1401,
+                    100
+                )
+
+                irr_preds = []
+
+                for irr in irr_values:
+
+                    pred_i, _ = predict_power(
+                        xgb_model,
+                        temp,
+                        irr,
+                        hour,
+                        cfg_region,
+                        lag_norm,
+                        cfg_maxpow
+                    )
+
+                    irr_preds.append(pred_i)
+
+                irr_df = pd.DataFrame({
+                    "Irradiance": irr_values,
+                    "Output (kWh)": irr_preds
+                })
+
+                st.line_chart(
+                    irr_df.set_index("Irradiance"),
+                    use_container_width=True
+                )
+                peak_hour = hour_df.loc[
+                    hour_df["Predicted Output (kWh)"].idxmax()
+                ]
+
+                st.success(
+                    f"Peak production diperkirakan terjadi pada pukul "
+                    f"**{int(peak_hour['Hour'])}:00** "
+                    f"dengan output sekitar "
+                    f"**{peak_hour['Predicted Output (kWh)']:.2f} kWh**."
+                )
             else:
                 st.info("Isi parameter di sebelah kiri, lalu tekan **Execute Prediction**.", icon="👈")
 
