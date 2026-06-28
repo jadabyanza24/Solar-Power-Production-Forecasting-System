@@ -1,6 +1,5 @@
 import streamlit as st
 
-# HARUS PALING AWAL
 st.set_page_config(
     page_title="Photovoltaic Management System",
     layout="wide"
@@ -10,155 +9,69 @@ import pandas as pd
 import numpy as np
 import pickle
 import time
-import math
 import os
 import urllib.request
 
-MODEL_PATH = "model.pkl"
-
-MODEL_URL = (
-    "https://huggingface.co/jadabyanza/solar-model/resolve/main/model.pkl"
-)
+# ─────────────────────────────────────────────────────────────
+# Model loading
+# pkl = dict: { 'models': {...}, 'scaler': ..., 'max_power': ..., 'features': [...] }
+# ─────────────────────────────────────────────────────────────
+MODEL_PATH = "solar_models_india.pkl"
+MODEL_URL  = "https://huggingface.co/jadabyanza/solar-model/resolve/main/solar_models_india.pkl"
 
 if not os.path.exists(MODEL_PATH):
-    urllib.request.urlretrieve(
-        MODEL_URL,
-        MODEL_PATH
-    )
+    with st.spinner("Downloading model..."):
+        urllib.request.urlretrieve(MODEL_URL, MODEL_PATH)
 
-# ─────────────────────────────────────────────────────────────
-# Region assignment — tropical override + bbox-first + nearest edge
-#
-# Prioritas:
-# 1. Zona tropis Asia (lat -15..25, lon 90..145) → India
-#    Indonesia, SEA, Filipina: iklim solar paling mirip dataset India.
-# 2. Di dalam bbox region → assign langsung.
-# 3. Di luar semua bbox → nearest bbox edge (bukan centroid).
-# ─────────────────────────────────────────────────────────────
+FEATURE_NAMES = ['irradiance', 'temp', 'lag_power_1h', 'hour']
 
-# (lat_min, lat_max, lon_min, lon_max)
-REGION_BBOX = {
-    "India":     (6.0,   37.0,  67.0,  98.0),
-    "Australia": (-44.0, -10.0, 112.0, 154.0),
-    "USA":       (24.0,   50.0, -125.0, -65.0),
-}
-
-REGION_CENTROIDS = {
-    "India":     (20.5937,  78.9629),
-    "Australia": (-25.2744, 133.7751),
-    "USA":       (37.0902, -95.7129),
-}
-
-def haversine(lat1, lon1, lat2, lon2) -> float:
-    R = 6371.0
-    phi1, phi2 = math.radians(lat1), math.radians(lat2)
-    dphi = math.radians(lat2 - lat1)
-    dlam = math.radians(lon2 - lon1)
-    a = math.sin(dphi/2)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlam/2)**2
-    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-
-def _dist_to_bbox(lat, lon, lat_min, lat_max, lon_min, lon_max) -> float:
-    """Haversine ke titik terdekat di tepi bbox. 0 jika di dalam."""
-    clat = max(lat_min, min(lat, lat_max))
-    clon = max(lon_min, min(lon, lon_max))
-    return haversine(lat, lon, clat, clon)
-
-def assign_region(lat: float, lon: float) -> str:
-    # Climate-aware regional matching
-    # Combines geographic distance and latitude similarity.
-    scores = {}
-
-    for region in REGION_BBOX:
-        geo_dist = _dist_to_bbox(lat, lon, *REGION_BBOX[region])
-
-        region_lat = abs(REGION_CENTROIDS[region][0])
-        lat_diff = abs(abs(lat) - region_lat)
-
-        # 1 degree latitude ~= 111 km
-        climate_penalty = lat_diff * 300
-
-        scores[region] = geo_dist + climate_penalty
-
-    return min(scores, key=scores.get)
-
-def region_distances(lat: float, lon: float) -> dict:
-    return {r: round(haversine(lat, lon, *REGION_CENTROIDS[r])) for r in REGION_CENTROIDS}
-
-def region_bbox_distances(lat: float, lon: float) -> dict:
-    return {r: round(_dist_to_bbox(lat, lon, *REGION_BBOX[r])) for r in REGION_BBOX}
-
-# ─────────────────────────────────────────────────────────────
-# Feature order (harus match X.columns dari notebook)
-# ─────────────────────────────────────────────────────────────
-FEATURE_NAMES = [
-    "temp", "irradiance", "lag_power_1h", "hour",
-    "location_Australia", "location_India", "location_USA",
-]
-
-def build_feature_row(temp, irradiance_wm2, hour, region, lag_power_norm=0.0):
-    row = {
-        "temp":               temp,
-        "irradiance":         irradiance_wm2,
-        "lag_power_1h":       lag_power_norm,
-        "hour":               hour,
-        "location_Australia": 1 if region == "Australia" else 0,
-        "location_India":     1 if region == "India"     else 0,
-        "location_USA":       1 if region == "USA"       else 0,
-    }
-    return np.array([[row[f] for f in FEATURE_NAMES]])
-
-# ─────────────────────────────────────────────────────────────
-# Load model bundle
-# pkl = list of dicts: { 'Model': str, 'Object': trained_model, ... }
-# ─────────────────────────────────────────────────────────────
 @st.cache_resource
 def load_model_bundle():
     try:
-        with open("model.pkl", "rb") as f:
-            results = pickle.load(f)
+        with open(MODEL_PATH, "rb") as f:
+            pkg = pickle.load(f)
     except Exception as e:
         st.error(f"Failed to load model: {e}")
-        return None, []
+        return None, None, None, []
 
-    xgb_model = None
+    models    = pkg.get('models', {})
+    scaler    = pkg.get('scaler')
+    max_power = pkg.get('max_power', 1.0)
+    features  = pkg.get('features', FEATURE_NAMES)
 
-    for r in results:
-        name = r.get("Model", "")
-        obj = r.get("Object")
+    # Pilih XGBoost sebagai model utama
+    xgb = models.get('XGBoost') or models.get('xgboost')
+    if xgb is None:
+        # fallback: ambil model pertama
+        xgb = next(iter(models.values()), None)
 
-        if obj and ("XGBoost" in name or "xgb" in name.lower()):
-            xgb_model = obj
-            break
+    return xgb, scaler, max_power, features
 
-    feat_names = []
+def build_feature_row(irradiance, temp, lag_power_norm, hour):
+    row = {
+        'irradiance':   irradiance,
+        'temp':         temp,
+        'lag_power_1h': lag_power_norm,
+        'hour':         hour,
+    }
+    return np.array([[row[f] for f in FEATURE_NAMES]])
 
-    if xgb_model is not None:
-        try:
-            feat_names = xgb_model.get_booster().feature_names or []
-        except Exception:
-            pass
-
-    return xgb_model, feat_names
-
-def predict_power(model, temp, irradiance_wm2, hour, region, lag_norm, max_power):
-    X = build_feature_row(temp, irradiance_wm2, hour, region, lag_norm)
+def predict_power(model, irradiance, temp, hour, lag_norm, max_power):
+    X = build_feature_row(irradiance, temp, lag_norm, hour)
     t0 = time.perf_counter()
     power_norm = model.predict(X)[0]
     latency    = (time.perf_counter() - t0) * 1000
-    power_kwh  = float(np.clip(power_norm, 0, None) * max_power)
-    return power_kwh, latency
+    power_out  = float(np.clip(power_norm, 0, None) * max_power)
+    return power_out, latency
 
 # ─────────────────────────────────────────────────────────────
-# Session state defaults
+# Session state
 # ─────────────────────────────────────────────────────────────
 DEFAULTS = {
-    "setup_complete":    False,
-    "station_name":      "Jakarta Site 01",
-    "station_lat":       -6.2088,
-    "station_lon":       106.8456,
-    "assigned_region":   None,
-    "max_power":         500.0,
-    "last_power_norm":   0.0,
+    "setup_complete":  False,
+    "station_name":    "Jakarta Site 01",
+    "max_power":       500.0,
+    "last_power_norm": 0.0,
 }
 for k, v in DEFAULTS.items():
     if k not in st.session_state:
@@ -170,26 +83,13 @@ for k, v in DEFAULTS.items():
 if not st.session_state.setup_complete:
     st.title("System Commissioning: Station Setup")
     st.write(
-        "Masukkan koordinat stasiun. Sistem akan memilih region dataset "
-        "menggunakan Climate-Aware Regional Matching yang mempertimbangkan "
-        "kedekatan geografis dan kemiripan karakteristik lintang."
+        "Model dilatih menggunakan data sensor real dari pembangkit fotovoltaik di India "
+        "(dataset: Kaggle `anikannal/solar-power-generation-data`, Plant 1). "
+        "Masukkan nama stasiun dan kapasitas panel untuk memulai."
     )
 
     with st.form("setup_form"):
         name_input = st.text_input("Station Name", value=st.session_state.station_name)
-        c1, c2 = st.columns(2)
-        with c1:
-            lat_input = st.number_input(
-                "Latitude", value=st.session_state.station_lat,
-                min_value=-90.0, max_value=90.0, format="%.4f",
-                help="Positif = utara, negatif = selatan."
-            )
-        with c2:
-            lon_input = st.number_input(
-                "Longitude", value=st.session_state.station_lon,
-                min_value=-180.0, max_value=180.0, format="%.4f",
-                help="Positif = timur Greenwich, negatif = barat."
-            )
 
         max_power_input = st.number_input(
             "Kapasitas Maksimum Panel (kWh)",
@@ -198,80 +98,47 @@ if not st.session_state.setup_complete:
             help="Peak output instalasi — dipakai untuk de-normalisasi prediksi."
         )
 
-        # Live preview region assignment sebelum submit
-        preview_region  = assign_region(lat_input, lon_input)
-        bbox_dists      = region_bbox_distances(lat_input, lon_input)
-        centroid_dists  = region_distances(lat_input, lon_input)
-
-        # Tentukan apakah koordinat di dalam bbox
-        inside_bbox = bbox_dists[preview_region] == 0
-        reason = "koordinat berada di dalam bounding box region ini" if inside_bbox \
-            else f"tepi bbox terdekat: {bbox_dists[preview_region]:,} km"
-
-        bbox_detail = "  |  ".join(
-            f"{'✅ ' if r == preview_region else ''}{r}: {d:,} km ke bbox"
-            for r, d in bbox_dists.items()
-        )
-
         st.info(
-            f"**Recommended Training Region: `{preview_region}`**\n\n"
-            "Pemilihan dilakukan menggunakan kombinasi "
-            "jarak geografis dan kemiripan zona lintang "
-            "(Climate-Aware Regional Matching)."
+            "**Training Region: India** \n\n"
+            "Model dilatih pada data irradiance dan suhu sensor nyata dari "
+            "Plant 1, India. Prediksi menggunakan fitur: "
+            "`irradiance`, `temp`, `lag_power_1h`, `hour`."
         )
 
         submitted = st.form_submit_button("Complete Initialization")
         if submitted:
-            st.session_state.station_name    = name_input
-            st.session_state.station_lat     = lat_input
-            st.session_state.station_lon     = lon_input
-            st.session_state.assigned_region = preview_region
-            st.session_state.max_power       = max_power_input
-            st.session_state.setup_complete  = True
+            st.session_state.station_name   = name_input
+            st.session_state.max_power      = max_power_input
+            st.session_state.setup_complete = True
             st.rerun()
 
 # ─────────────────────────────────────────────────────────────
 # STAGE 2 — Prediction Dashboard
 # ─────────────────────────────────────────────────────────────
 else:
-    xgb_model, feat_names = load_model_bundle()
+    xgb_model, scaler, max_power_loaded, feat_names = load_model_bundle()
+
     cfg_name   = st.session_state.station_name
-    cfg_lat    = st.session_state.station_lat
-    cfg_lon    = st.session_state.station_lon
-    cfg_region = st.session_state.assigned_region
     cfg_maxpow = st.session_state.max_power
 
     # ── Sidebar ──────────────────────────────────────────────
     with st.sidebar:
         st.header("System Status")
         st.write(f"**Station:** {cfg_name}")
-        st.write(f"**Coordinates:** {cfg_lat:.4f}, {cfg_lon:.4f}")
-        st.write(f"**Assigned region:** `{cfg_region}`")
-        st.caption(
-            "Region dipilih menggunakan Climate-Aware Regional Matching "
-            "(geographic proximity + latitude similarity)."
-        )
+        st.write(f"**Training region:** `India`")
         st.write(f"**Max capacity:** {cfg_maxpow:,.1f} kWh")
+        st.write(f"**Max power (model):** {max_power_loaded:,.2f}")
+        st.caption("De-normalisasi menggunakan max_power dari data training.")
 
         st.divider()
-        st.caption("Distance to region bbox edge (0 = inside)")
-        bbox_dists_sb = region_bbox_distances(cfg_lat, cfg_lon)
-        for r, d in bbox_dists_sb.items():
-            badge = "✅" if r == cfg_region else "  "
-            label = "inside bbox" if d == 0 else f"{d:,} km to edge"
-            st.write(f"{badge} {r}: **{label}**")
 
         if xgb_model is not None:
-            st.divider()
             st.success("XGBoost model ready")
         else:
-            st.error(
-                "Model tidak ditemukan. Pastikan `model.pkl` "
-                "ada di direktori yang sama dengan `app.py`."
-            )
+            st.error("Model tidak ditemukan. Pastikan `solar_models_india.pkl` ada.")
 
         if feat_names:
-            with st.expander("Feature names (dari booster)"):
+            with st.expander("Features"):
                 st.code("\n".join(feat_names))
 
         st.divider()
@@ -283,15 +150,12 @@ else:
     # ── Header ────────────────────────────────────────────────
     st.title("Photovoltaic Energy Production Forecasting")
     st.caption(
-        f"**{cfg_name}** · {cfg_lat:.4f}, {cfg_lon:.4f} "
-        f"· Region: **{cfg_region}** · Capacity: **{cfg_maxpow:,.1f} kWh**"
+        f"**{cfg_name}** · Training region: **India** · "
+        f"Capacity: **{cfg_maxpow:,.1f} kWh**"
     )
 
     if xgb_model is None:
-        st.warning(
-            "Model belum termuat. Letakkan `model.pkl` "
-            "di direktori yang sama dengan `app.py`, lalu refresh."
-        )
+        st.warning("Model belum termuat. Letakkan `solar_models_india.pkl` di direktori yang sama, lalu refresh.")
         st.stop()
 
     # ── Tabs ──────────────────────────────────────────────────
@@ -318,132 +182,54 @@ else:
         with col_out:
             st.subheader("Output")
             if run_btn:
-                power_kwh, latency = predict_power(
-                    xgb_model, temp, irradiance, hour,
-                    cfg_region, lag_norm, cfg_maxpow
+                power_out, latency = predict_power(
+                    xgb_model, irradiance, temp, hour, lag_norm, cfg_maxpow
                 )
-                norm_val = power_kwh / cfg_maxpow if cfg_maxpow > 0 else 0.0
+                norm_val = power_out / cfg_maxpow if cfg_maxpow > 0 else 0.0
                 st.session_state.last_power_norm = float(np.clip(norm_val, 0, 1))
 
                 eff_pct = norm_val * 100
                 m1, m2, m3 = st.columns(3)
-                m1.metric("Predicted Output", f"{power_kwh:,.4f} kWh")
-                m2.metric("Efficiency", f"{eff_pct:.1f}%")
-                m3.metric("Latency", f"{latency:.4f} ms")
+                m1.metric("Predicted Output", f"{power_out:,.4f} kWh")
+                m2.metric("Efficiency",       f"{eff_pct:.1f}%")
+                m3.metric("Latency",          f"{latency:.4f} ms")
                 st.progress(min(eff_pct / 100, 1.0))
 
                 st.divider()
                 detail = pd.DataFrame({
-                    "Parameter": ["Hour", "Temperature", "Irradiance", "Lag Power", "Region (auto-assigned)"],
-                    "Value":     [hour, f"{temp} °C", f"{irradiance} W/m²", f"{lag_norm:.3f}", cfg_region],
+                    "Parameter": ["Hour", "Temperature", "Irradiance", "Lag Power"],
+                    "Value":     [hour, f"{temp} °C", f"{irradiance} W/m²", f"{lag_norm:.3f}"],
                 })
                 st.table(detail.set_index("Parameter"))
                 st.info(
                     f"Lag power diperbarui ke **{st.session_state.last_power_norm:.4f}** "
                     "untuk prediksi berikutnya."
                 )
+
                 st.divider()
                 st.subheader("Production Forecast by Hour")
+                hours      = list(range(6, 19))
+                hour_preds = [predict_power(xgb_model, irradiance, temp, h, lag_norm, cfg_maxpow)[0] for h in hours]
+                hour_df    = pd.DataFrame({"Hour": hours, "Predicted Output (kWh)": hour_preds})
+                st.line_chart(hour_df.set_index("Hour"), use_container_width=True)
 
-                hours = list(range(6, 19))
-                hour_preds = []
-
-                for h in hours:
-                    pred_h, _ = predict_power(
-                        xgb_model,
-                        temp,
-                        irradiance,
-                        h,
-                        cfg_region,
-                        lag_norm,
-                        cfg_maxpow
-                    )
-                    hour_preds.append(pred_h)
-
-                hour_df = pd.DataFrame({
-                    "Hour": hours,
-                    "Predicted Output (kWh)": hour_preds
-                })
-
-                st.line_chart(
-                    hour_df.set_index("Hour"),
-                    use_container_width=True
-                )
                 st.subheader("Temperature Sensitivity")
+                temp_range = np.arange(temp - 10, temp + 11, 1)
+                temp_preds = [predict_power(xgb_model, irradiance, t, hour, lag_norm, cfg_maxpow)[0] for t in temp_range]
+                temp_df    = pd.DataFrame({"Temperature": temp_range, "Output (kWh)": temp_preds})
+                st.line_chart(temp_df.set_index("Temperature"), use_container_width=True)
 
-                temp_range = np.arange(
-                    temp - 10,
-                    temp + 11,
-                    1
-                )
-
-                temp_preds = []
-
-                for t in temp_range:
-
-                    pred_t, _ = predict_power(
-                        xgb_model,
-                        t,
-                        irradiance,
-                        hour,
-                        cfg_region,
-                        lag_norm,
-                        cfg_maxpow
-                    )
-
-                    temp_preds.append(pred_t)
-
-                temp_df = pd.DataFrame({
-                    "Temperature": temp_range,
-                    "Output (kWh)": temp_preds
-                })
-
-                st.line_chart(
-                    temp_df.set_index("Temperature"),
-                    use_container_width=True
-                )
                 st.subheader("Irradiance Sensitivity")
+                irr_values = np.arange(0, 1401, 100)
+                irr_preds  = [predict_power(xgb_model, irr, temp, hour, lag_norm, cfg_maxpow)[0] for irr in irr_values]
+                irr_df     = pd.DataFrame({"Irradiance": irr_values, "Output (kWh)": irr_preds})
+                st.line_chart(irr_df.set_index("Irradiance"), use_container_width=True)
 
-                irr_values = np.arange(
-                    0,
-                    1401,
-                    100
-                )
-
-                irr_preds = []
-
-                for irr in irr_values:
-
-                    pred_i, _ = predict_power(
-                        xgb_model,
-                        temp,
-                        irr,
-                        hour,
-                        cfg_region,
-                        lag_norm,
-                        cfg_maxpow
-                    )
-
-                    irr_preds.append(pred_i)
-
-                irr_df = pd.DataFrame({
-                    "Irradiance": irr_values,
-                    "Output (kWh)": irr_preds
-                })
-
-                st.line_chart(
-                    irr_df.set_index("Irradiance"),
-                    use_container_width=True
-                )
-                peak_hour = hour_df.loc[
-                    hour_df["Predicted Output (kWh)"].idxmax()
-                ]
-
+                peak_hour = hour_df.loc[hour_df["Predicted Output (kWh)"].idxmax()]
                 st.success(
                     f"Peak production diperkirakan terjadi pada pukul "
                     f"**{int(peak_hour['Hour'])}:00** "
-                    f"dengan output sekitar "
-                    f"**{peak_hour['Predicted Output (kWh)']:.2f} kWh**."
+                    f"dengan output sekitar **{peak_hour['Predicted Output (kWh)']:.2f} kWh**."
                 )
             else:
                 st.info("Isi parameter di sebelah kiri, lalu tekan **Execute Prediction**.", icon="👈")
@@ -453,7 +239,7 @@ else:
         st.subheader("Batch Prediction via CSV")
         st.write(
             "Upload CSV dengan kolom wajib: `temperature`, `irradiance`, `hour`.  \n"
-            "Kolom opsional: `lag_power_1h` (default 0), `lat` + `lon` (override region per-baris)."
+            "Kolom opsional: `lag_power_1h` (default 0)."
         )
 
         with st.expander("Format CSV yang diharapkan"):
@@ -462,8 +248,6 @@ else:
                 "irradiance":   [600.0, 750.0, 820.0],
                 "hour":         [8, 10, 12],
                 "lag_power_1h": [0.0, 0.12, 0.20],
-                "lat":          [-6.21, -7.25, -6.90],
-                "lon":          [106.84, 112.75, 107.60],
             })
             st.dataframe(sample, use_container_width=True)
             st.download_button(
@@ -490,58 +274,26 @@ else:
                     if "lag_power_1h" not in data.columns:
                         data["lag_power_1h"] = 0.0
 
-                    # Tentukan region per baris
-                    has_coords = "lat" in data.columns and "lon" in data.columns
-                    if has_coords:
-                        data["_region"] = data.apply(
-                            lambda r: assign_region(r["lat"], r["lon"]), axis=1
-                        )
-                        region_counts = data["_region"].value_counts().to_dict()
-                        st.info(
-                            "Region per-baris dari koordinat (bbox-first): "
-                            + ", ".join(f"**{r}**: {n} baris" for r, n in region_counts.items()),
-                            icon="🌏"
-                        )
-                    else:
-                        data["_region"] = cfg_region
-                        st.info(
-                            f"Kolom `lat`/`lon` tidak ada — semua baris pakai region setup: **{cfg_region}**",
-                            icon="ℹ️"
-                        )
-
-                    # Filter jam aktif (sesuai notebook: hour 6–18)
+                    # Filter jam aktif
                     before = len(data)
-                    data = data[(data["hour"] >= 6) & (data["hour"] <= 18)].copy()
-                    skipped = before - len(data)
-                    if skipped:
-                        st.warning(f"{skipped} baris di luar jam aktif (6–18) dilewati.")
+                    data   = data[(data["hour"] >= 6) & (data["hour"] <= 18)].copy()
+                    if before - len(data):
+                        st.warning(f"{before - len(data)} baris di luar jam aktif (6–18) dilewati.")
 
                     # Build feature matrix
-                    rows = []
-                    for _, row in data.iterrows():
-                        feat = {
-                            "temp":               row["temperature"],
-                            "irradiance":         row["irradiance"],
-                            "lag_power_1h":       row["lag_power_1h"],
-                            "hour":               int(row["hour"]),
-                            "location_Australia": 1 if row["_region"] == "Australia" else 0,
-                            "location_India":     1 if row["_region"] == "India"     else 0,
-                            "location_USA":       1 if row["_region"] == "USA"       else 0,
-                        }
-                        rows.append([feat[f] for f in FEATURE_NAMES])
+                    X_batch = np.array([
+                        [row["irradiance"], row["temperature"], row["lag_power_1h"], int(row["hour"])]
+                        for _, row in data.iterrows()
+                    ])
 
-                    X_batch = np.array(rows)
-                    t0 = time.perf_counter()
-                    preds_norm = xgb_model.predict(X_batch)
-                    batch_time = time.perf_counter() - t0
+                    t0          = time.perf_counter()
+                    preds_norm  = xgb_model.predict(X_batch)
+                    batch_time  = time.perf_counter() - t0
 
                     preds_kwh = np.clip(preds_norm, 0, None) * cfg_maxpow
                     data["predicted_power_kwh"] = np.round(preds_kwh, 4)
-                    data["power_norm"]          = np.round(np.clip(preds_norm, 0, None), 6)
-                    data["assigned_region"]     = data["_region"]
-                    data = data.drop(columns=["_region"])
+                    data["power_norm"]           = np.round(np.clip(preds_norm, 0, None), 6)
 
-                    # Summary metrics
                     st.divider()
                     st.write(f"**{len(data):,} baris** diproses dalam **{batch_time:.4f}s**.")
                     s1, s2, s3, s4 = st.columns(4)
@@ -562,5 +314,5 @@ else:
     st.divider()
     st.caption(
         "Research Implementation: Lightweight ML for Renewable Energy | SDG 7 | 2026 | "
-        "Model: XGBoost"
+        "Model: XGBoost · Dataset: Solar Power Generation Data, India (Kaggle)"
     )
